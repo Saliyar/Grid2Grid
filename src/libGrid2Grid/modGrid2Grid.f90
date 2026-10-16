@@ -460,5 +460,44 @@ end subroutine
     end subroutine
 
 !-----------------------------------------------------------------------
+
+    ! C bindings of the stored-basis routines
+    subroutine setupFastHOS_c(v2vIndex, n, X, Z) &
+        bind(c, name='__modgrid2grid_MOD_setupfast')
+        implicit none
+        integer, intent(in)           :: v2vIndex, n
+        Double precision, intent(in)  :: X(n), Z(n)
+        real(rp), allocatable :: xr(:), zr(:)
+        if (inpVol2Vol(v2vIndex)%isActive) then
+            allocate(xr(n), zr(n))
+            xr = real(X, rp)
+            zr = real(Z, rp)
+            Call vol2vol_(v2vIndex)%setupFast(n, xr, zr)
+        else
+            write(*,*) "    [Error] setupFast : wrong index is given., index : ", v2vIndex
+            stop
+        end if
+    end subroutine
+
+    subroutine evaluateFastHOS_c(v2vIndex, t, n, eta, u, w, pd) &
+        bind(c, name='__modgrid2grid_MOD_evaluatefast')
+        implicit none
+        integer, intent(in)           :: v2vIndex, n
+        Double precision, intent(in)  :: t
+        Double precision, intent(out) :: eta(n), u(n), w(n), pd(n)
+        real(rp), allocatable :: er(:), ur(:), wr(:), pr(:)
+        if (inpVol2Vol(v2vIndex)%isActive) then
+            allocate(er(n), ur(n), wr(n), pr(n))
+            Call vol2vol_(v2vIndex)%evaluateFast(real(t, rp), n, er, ur, wr, pr)
+            eta = dble(er)
+            u = dble(ur)
+            w = dble(wr)
+            pd = dble(pr)
+        else
+            write(*,*) "    [Error] evaluateFast : wrong index is given., index : ", v2vIndex
+            stop
+        end if
+    end subroutine
+
 End Module
 !-----------------------------------------------------------------------

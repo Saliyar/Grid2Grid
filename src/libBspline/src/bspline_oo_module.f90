@@ -17,6 +17,9 @@
     implicit none
 
     private
+    ! new public accessors for stored-basis evaluation
+    public :: bspline2d_info, bspline2d_knots, bspline2d_contract_last
+    public :: bspline3d_info, bspline3d_knots, bspline3d_contract_last
 
     integer,parameter :: int_size     = storage_size(1)       !! size of a default integer [bits]
     integer,parameter :: logical_size = storage_size(.true.)  !! size of a default logical [bits]
@@ -2629,5 +2632,65 @@
 !*****************************************************************************************
 
 !*****************************************************************************************
-    end module bspline_oo_module
+    
+    !> sizes and orders of a bspline_2d
+    pure subroutine bspline2d_info(me,nx_,ny_,kx_,ky_)
+        type(bspline_2d),intent(in) :: me
+        integer,intent(out) :: nx_, ny_, kx_, ky_
+        nx_ = me%nx; ny_ = me%ny; kx_ = me%kx; ky_ = me%ky
+    end subroutine bspline2d_info
+
+    !> knot vectors of a bspline_2d
+    pure subroutine bspline2d_knots(me,tx_,ty_)
+        type(bspline_2d),intent(in) :: me
+        real(wp),dimension(:),allocatable,intent(out) :: tx_, ty_
+        tx_ = me%tx; ty_ = me%ty
+    end subroutine bspline2d_knots
+
+    !> coefficients contracted with the last-dimension basis:
+    !! c(i) = sum_q bcoef(i, lef-kt+q) * bt(q), the same sum db2val forms for its
+    !! last dimension
+    pure subroutine bspline2d_contract_last(me,kt,lef,bt,c)
+        type(bspline_2d),intent(in) :: me
+        integer,intent(in) :: kt, lef
+        real(wp),dimension(kt),intent(in) :: bt
+        real(wp),dimension(:),intent(out) :: c
+        integer :: q
+        c = 0.0_wp
+        do q = 1,kt
+            c = c + me%bcoef(:,lef-kt+q)*bt(q)
+        end do
+    end subroutine bspline2d_contract_last
+
+    !> sizes and orders of a bspline_3d
+    pure subroutine bspline3d_info(me,nx_,ny_,nz_,kx_,ky_,kz_)
+        type(bspline_3d),intent(in) :: me
+        integer,intent(out) :: nx_, ny_, nz_, kx_, ky_, kz_
+        nx_ = me%nx; ny_ = me%ny; nz_ = me%nz
+        kx_ = me%kx; ky_ = me%ky; kz_ = me%kz
+    end subroutine bspline3d_info
+
+    !> knot vectors of a bspline_3d
+    pure subroutine bspline3d_knots(me,tx_,ty_,tz_)
+        type(bspline_3d),intent(in) :: me
+        real(wp),dimension(:),allocatable,intent(out) :: tx_, ty_, tz_
+        tx_ = me%tx; ty_ = me%ty; tz_ = me%tz
+    end subroutine bspline3d_knots
+
+    !> coefficients contracted with the last-dimension basis
+    !! (the time dimension of the HOS splines): c(i,j) = sum_q bcoef(i,j,lef-kt+q) bt(q)
+    pure subroutine bspline3d_contract_last(me,kt,lef,bt,c)
+        type(bspline_3d),intent(in) :: me
+        integer,intent(in) :: kt, lef
+        real(wp),dimension(kt),intent(in) :: bt
+        real(wp),dimension(:,:),intent(out) :: c
+        integer :: q
+        c = 0.0_wp
+        do q = 1,kt
+            c = c + me%bcoef(:,:,lef-kt+q)*bt(q)
+        end do
+    end subroutine bspline3d_contract_last
+
+
+end module bspline_oo_module
 !*****************************************************************************************

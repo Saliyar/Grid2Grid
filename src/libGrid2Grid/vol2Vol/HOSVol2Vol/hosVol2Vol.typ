@@ -75,6 +75,18 @@ type, public :: typHOSVol2Vol
         !!- 3D interpolation Class
         type(typV2VInterp3D) :: itp3D_
 
+        !!- stored spline basis of the 2D points (x, z)
+        logical                 :: fastReady_ = .FALSE.
+        integer                 :: fastN_ = 0, fastNcol_ = 0
+        integer                 :: fastKx_ = 0, fastKz_ = 0
+        integer,allocatable     :: fastCol_(:), fastColLef_(:)
+        real(rp),allocatable    :: fastColBas_(:,:)
+        real(rp),allocatable    :: fastX_(:), fastZ_(:)
+        integer,allocatable     :: fastLefZ_(:)
+        real(rp),allocatable    :: fastZBas_(:,:)
+        logical,allocatable     :: fastOk_(:)
+        logical,allocatable     :: fastZOut_(:)
+
 contains
 
     !!- Update HOS Surf2Vol and Index
@@ -116,6 +128,12 @@ contains
 
     !!- Destroy Vol2Vol
     procedure, pass, public :: destroy => destroyVol2Vol
+
+    !!- store the stored-basis data of the 2D points
+    procedure, pass, public :: setupFast => setupFastHOS
+
+    !!- eta, u, w, pd of all stored points at time t
+    procedure, pass, public :: evaluateFast => evaluateFastHOS
 
     generic, public :: initialize => initializeVol2VolArgument, &
                                      initilizeVol2VolDict

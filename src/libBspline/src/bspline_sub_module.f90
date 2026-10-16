@@ -63,6 +63,9 @@
 
     public :: get_status_message
 
+    ! new public helper
+    public :: bspline_interval_basis
+
     contains
 
 !*****************************************************************************************
@@ -3305,5 +3308,26 @@
 !*****************************************************************************************
 
 !*****************************************************************************************
-    end module bspline_sub_module
+    
+    !> Interval and basis values of order k at x, obtained with the
+    !! same routines (dintrv, dbspvn) that db2val and db3val use internally.
+    pure subroutine bspline_interval_basis(tk,lxt,k,x,ileft,bas,mflag)
+    implicit none
+    integer,intent(in)                    :: lxt  !! length of knot vector tk
+    real(wp),dimension(lxt),intent(in)    :: tk   !! knot vector
+    integer,intent(in)                    :: k    !! order
+    real(wp),intent(in)                   :: x    !! evaluation point
+    integer,intent(out)                   :: ileft !! interval index, tk(ileft) <= x < tk(ileft+1)
+    real(wp),dimension(k),intent(out)     :: bas  !! the k nonzero basis values at x
+    integer,intent(out)                   :: mflag !! 0: ok
+    real(wp),dimension(2*k)               :: work
+    integer                               :: ilo, iwork, iflag
+    ilo = 1
+    call dintrv(tk,lxt,x,ilo,ileft,mflag)
+    if (mflag /= 0) return
+    call dbspvn(tk,k,k,1,x,ileft,bas,work,iwork,iflag)
+    if (iflag /= 0) mflag = 2
+    end subroutine bspline_interval_basis
+
+end module bspline_sub_module
 !*****************************************************************************************

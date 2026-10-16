@@ -1014,3 +1014,225 @@ subroutine checkHOSZ(this,  nonDimZ)
     end if
 
 end subroutine
+
+
+!> Store, once, the spline basis of the 2D HOS points.
+!! X, Z are dimensional positions in the HOS frame [m]. The x basis is stored per
+!! distinct x (columns), the z basis per point. Coefficients enter in evaluateFastHOS.
+!! Points the stored tables cannot represent exactly are flagged (fastOk_ false) and
+!! are evaluated by the original routines.
+SUBROUTINE setupFastHOS(this, n, X, Z)
+    implicit none
+    class(typHOSVol2Vol), intent(inout) :: this
+    integer, intent(in)  :: n
+    real(RP), intent(in) :: X(n), Z(n)
+    integer :: p, c, ncol, lef, mflag
+    integer :: nxe, kxe, kte, nxu, nyu, nzu, kxu, kyu, kzu
+    real(wp), allocatable :: txe(:), tye(:), txu(:), tyu(:), tzu(:)
+    real(wp), allocatable :: colX(:), bas(:), basz(:)
+    real(RP) :: xnd, znd, zlo, zhi
+    logical :: found
+
+    this%fastReady_ = .FALSE.
+    if (.NOT. this%isHOS2D_) return
+
+    ! eta spline and the velocity/pressure splines must share the x knots and order
+    call bspline2d_info(this%itp2D_%spl2eta, nxe, c, kxe, kte)
+    call bspline2d_knots(this%itp2D_%spl2eta, txe, tye)
+    call bspline3d_info(this%itp2D_%spl3u, nxu, nyu, nzu, kxu, kyu, kzu)
+    call bspline3d_knots(this%itp2D_%spl3u, txu, tyu, tzu)
+    if (kxe /= kxu) return
+    if (size(txe) /= size(txu)) return
+    if (any(txe /= txu)) return
+
+    if (allocated(this%fastCol_)) then
+        deallocate(this%fastCol_, this%fastColLef_, this%fastColBas_, this%fastX_, &
+                   this%fastZ_, this%fastLefZ_, this%fastZBas_, this%fastOk_, this%fastZOut_)
+    end if
+    allocate(this%fastCol_(n), this%fastColLef_(n), this%fastColBas_(kxu, n))
+    allocate(this%fastX_(n), this%fastZ_(n), this%fastLefZ_(n), this%fastZBas_(kyu, n), this%fastOk_(n), this%fastZOut_(n))
+    allocate(colX(n), bas(kxu), basz(kyu))
+
+    this%fastN_ = n
+    this%fastKx_ = kxu
+    this%fastKz_ = kyu
+    zlo = this%nonDimZMin_
+    zhi = this%nonDimZMax_
+    ncol = 0
+
+    do p = 1, n
+        this%fastX_(p) = X(p)
+        this%fastZ_(p) = Z(p)
+        this%fastOk_(p) = .FALSE.
+        this%fastCol_(p) = 0
+        this%fastLefZ_(p) = 0
+        this%fastZBas_(:,p) = 0.0_wp
+
+        this%fastZOut_(p) = .FALSE.
+        xnd = X(p) / this%dimL_
+        znd = Z(p) / this%dimL_
+
+        ! same coordinate checks as getEta/getU/getPd: x in range
+        if (xnd < 0.0_RP .OR. xnd > this%nonDimLx_) cycle
+
+        ! x column: one interval and basis per distinct x (eta is computed per column)
+        found = .FALSE.
+        c = 0
+        do c = 1, ncol
+            if (colX(c) == xnd) then
+                found = .TRUE.
+                exit
+            end if
+        end do
+        if (.NOT. found) then
+            call bspline_interval_basis(txe, size(txe), kxe, xnd, lef, bas, mflag)
+            if (mflag /= 0) cycle
+            ncol = ncol + 1
+            colX(ncol) = xnd
+            this%fastColLef_(ncol) = lef
+            this%fastColBas_(:, ncol) = bas
+            c = ncol
+        end if
+        this%fastCol_(p) = c
+
+        ! z above the HOS domain: velocity and pressure are zero (silent; the blend
+        ! gives such points zero weight), eta still comes from the column
+        if (znd > zhi) then
+            this%fastZOut_(p) = .TRUE.
+            this%fastOk_(p) = .TRUE.
+            cycle
+        end if
+
+        ! not in range below, or at a z clamp edge: original routines
+        if (znd < zlo) cycle
+        if (abs(znd - zlo) <= convErr .OR. abs(znd - zhi) <= convErr) cycle
+
+        ! z basis per point (z knots and order of the 3D splines)
+        call bspline_interval_basis(tyu, size(tyu), kyu, znd, lef, basz, mflag)
+        if (mflag /= 0) cycle
+        this%fastLefZ_(p) = lef
+        this%fastZBas_(:, p) = basz
+        this%fastOk_(p) = .TRUE.
+    end do
+
+    this%fastNcol_ = ncol
+    this%fastReady_ = .TRUE.
+END SUBROUTINE setupFastHOS
+
+
+!> eta, u, w (v = 0 in 2D) and pd of all stored points at time t,
+!! as getEta, getU and getPd return them. Time is contracted into the coefficients once
+!! per spline and step; eta is computed once per x column and reused for u, w and pd.
+SUBROUTINE evaluateFastHOS(this, t, n, eta, u, w, pd)
+    implicit none
+    class(typHOSVol2Vol), intent(inout) :: this
+    real(RP), intent(in) :: t
+    integer, intent(in)  :: n
+    real(RP), intent(out) :: eta(n), u(n), w(n), pd(n)
+    integer :: p, c, a, b, lefT, lefU, lefW, lefP, mflag, lefZ, jx, jz
+    integer :: nxe, kxe, kte, nxu, nyu, nzu, kxu, kyu, kzu
+    real(wp), allocatable :: txe(:), tye(:), tzu(:), txu(:), tyu(:)
+    real(wp), allocatable :: btE(:), btU(:), btW(:), btP(:)
+    real(wp), allocatable :: cEta(:), colEta(:), cU(:,:), cW(:,:), cP(:,:)
+    real(RP) :: e, zn, sU, sW, sP, uu, vv, ww
+    logical :: okTime
+
+    okTime = this%fastReady_
+    if (okTime) then
+        call bspline2d_info(this%itp2D_%spl2eta, nxe, c, kxe, kte)
+        call bspline2d_knots(this%itp2D_%spl2eta, txe, tye)
+        call bspline3d_info(this%itp2D_%spl3u, nxu, nyu, nzu, kxu, kyu, kzu)
+        call bspline3d_knots(this%itp2D_%spl3u, txu, tyu, tzu)
+
+        allocate(btE(kte), cEta(nxe))
+        call bspline_interval_basis(tye, size(tye), kte, t, lefT, btE, mflag)
+        okTime = (mflag == 0)
+        if (okTime) call bspline2d_contract_last(this%itp2D_%spl2eta, kte, lefT, btE, cEta)
+    end if
+
+    if (okTime) then
+        ! velocity and pressure splines: time is their last dimension (order kzu)
+        allocate(btU(kzu), btW(kzu), btP(kzu), cU(nxu, nyu), cW(nxu, nyu), cP(nxu, nyu))
+        call bspline_interval_basis(tzu, size(tzu), kzu, t, lefU, btU, mflag)
+        okTime = (mflag == 0)
+        if (okTime) call bspline3d_contract_last(this%itp2D_%spl3u, kzu, lefU, btU, cU)
+        if (okTime) then
+            call bspline_interval_basis(tzu, size(tzu), kzu, t, lefW, btW, mflag)
+            okTime = (mflag == 0)
+            if (okTime) call bspline3d_contract_last(this%itp2D_%spl3w, kzu, lefW, btW, cW)
+        end if
+        if (okTime) then
+            call bspline_interval_basis(tzu, size(tzu), kzu, t, lefP, btP, mflag)
+            okTime = (mflag == 0)
+            if (okTime) call bspline3d_contract_last(this%itp2D_%spl3pd, kzu, lefP, btP, cP)
+        end if
+    end if
+
+    ! eta once per x column
+    if (okTime) then
+        allocate(colEta(this%fastNcol_))
+        do c = 1, this%fastNcol_
+            e = 0.0_RP
+            do a = 1, this%fastKx_
+                jx = this%fastColLef_(c) - kxe + a
+                e = e + this%fastColBas_(a, c)*cEta(jx)
+            end do
+            colEta(c) = e
+        end do
+    end if
+
+    do p = 1, n
+        if (.NOT. okTime .OR. .NOT. this%fastOk_(p)) then
+            eta(p) = this%getEta(this%fastX_(p), 0.0_RP, t)
+            call this%getU(this%fastX_(p), 0.0_RP, this%fastZ_(p), t, uu, vv, ww)
+            u(p) = uu
+            w(p) = ww
+            pd(p) = this%getPd(this%fastX_(p), 0.0_RP, this%fastZ_(p), t)
+            cycle
+        end if
+
+        c = this%fastCol_(p)
+        e = colEta(c)
+        eta(p) = e
+        if (this%fastZOut_(p)) then
+            u(p) = 0.0_RP
+            w(p) = 0.0_RP
+            pd(p) = 0.0_RP
+            cycle
+        end if
+        zn = this%fastZ_(p) / this%dimL_
+
+        ! the z clamp to eta (getU/getPd) changes the z basis: use the original routines
+        if (abs(zn*this%dimL_ - e) <= convErr) then
+            call this%getU(this%fastX_(p), 0.0_RP, this%fastZ_(p), t, uu, vv, ww)
+            u(p) = uu
+            w(p) = ww
+            pd(p) = this%getPd(this%fastX_(p), 0.0_RP, this%fastZ_(p), t)
+            cycle
+        end if
+
+        if (this%cutAtElevation_ .AND. zn > e/this%dimL_) then
+            u(p) = 0.0_RP
+            w(p) = 0.0_RP
+            pd(p) = 0.0_RP
+            cycle
+        end if
+
+        lefZ = this%fastLefZ_(p)
+        sU = 0.0_RP
+        sW = 0.0_RP
+        sP = 0.0_RP
+        do a = 1, this%fastKx_
+            jx = this%fastColLef_(c) - kxe + a
+            do b = 1, this%fastKz_
+                jz = lefZ - this%fastKz_ + b
+                sU = sU + this%fastColBas_(a, c)*this%fastZBas_(b, p)*cU(jx, jz)
+                sW = sW + this%fastColBas_(a, c)*this%fastZBas_(b, p)*cW(jx, jz)
+                sP = sP + this%fastColBas_(a, c)*this%fastZBas_(b, p)*cP(jx, jz)
+            end do
+        end do
+        u(p) = sU
+        w(p) = sW
+        pd(p) = sP
+    end do
+END SUBROUTINE evaluateFastHOS
