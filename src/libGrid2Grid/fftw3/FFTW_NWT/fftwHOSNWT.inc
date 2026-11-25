@@ -39,7 +39,7 @@ SUBROUTINE initFFTW_HOS_NWT(this, modenX, modenY, modenAdd)
 
     ! Initializing the FFT library
     ! FFTW-3.x library
-    this%flag = FFTW_PATIENT ! FFTW_MEASURE ! FFTW_PATIENT ! FFTW_EXHAUSTIVE
+    this%flag = FFTW_ESTIMATE ! deterministic plans (runs repeat to the bit); was FFTW_PATIENT
     IF (this%nY == 1) THEN
         ! 1D FFTs
         CALL dfftw_plan_r2r_1d( this%plan_CC, this%nX,   this%in(1,1),     this%out(1,1),     FFTW_REDFT00, this%flag)
